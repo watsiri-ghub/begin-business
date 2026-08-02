@@ -1488,27 +1488,22 @@ function readCategories() {
         window.syncAllToGoogleSheets = function() {
             if (!googleSheetUrl) return showToast('กรุณาระบุ Web App URL ก่อน');
             showToast('กำลังบังคับอัปโหลดข้อมูลทั้งหมดไป Cloud...');
-            const sendTransactions = fetch(googleSheetUrl, {
-                method: 'POST', 
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({
-                    entity: 'transaction', action: 'syncAll',
-                    transactions: transactions.map(t => ({ id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: getCategoryObj(t.category).name, contractCode: (contracts.find(c => c.id === t.contractId) || {}).code || t.contractCode || '-', amount: t.amount, method: t.method, note: t.note || '' }))
-                })
-            });
-            const sendContracts = fetch(googleSheetUrl, {
+
+            const postJson = (body) => fetch(googleSheetUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ entity: 'contract', action: 'syncAll', contracts: contracts })
+                body: JSON.stringify(body)
             });
-            const sendCategories = fetch(googleSheetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ entity: 'category', action: 'syncAll', categories: customCategories })
-            });
-            Promise.all([sendTransactions, sendContracts, sendCategories])
-                .then(() => showToast(`ส่งข้อมูลทั้งหมดไป Cloud เรียบร้อยแล้ว (${transactions.length} รายการ, ${contracts.length} สัญญา, ${customCategories.length} หมวดหมู่)`))
-                .catch(e => showToast('เกิดข้อผิดพลาดในการส่งข้อมูล'));
+
+            // ส่งทีละชุดตามลำดับ (ไม่ยิงพร้อมกัน) เพื่อลดโอกาส Apps Script ชนกันจนตอบ error
+            postJson({
+                entity: 'transaction', action: 'syncAll',
+                transactions: transactions.map(t => ({ id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: getCategoryObj(t.category).name, contractCode: (contracts.find(c => c.id === t.contractId) || {}).code || t.contractCode || '-', amount: t.amount, method: t.method, note: t.note || '' }))
+            })
+            .then(() => postJson({ entity: 'contract', action: 'syncAll', contracts: contracts }))
+            .then(() => postJson({ entity: 'category', action: 'syncAll', categories: customCategories }))
+            .then(() => showToast(`ส่งข้อมูลทั้งหมดไป Cloud เรียบร้อยแล้ว (${transactions.length} รายการ, ${contracts.length} สัญญา, ${customCategories.length} หมวดหมู่)`))
+            .catch(e => showToast('เกิดข้อผิดพลาดในการส่งข้อมูล ลองกดใหม่อีกครั้ง'));
         };
 
         window.fetchFromGoogleSheet = function() {
@@ -1564,10 +1559,11 @@ function readCategories() {
             window.openConfirmModal('ยืนยันล้างข้อมูลทั้งหมด', 'ข้อมูลรายการและสัญญาในเครื่องจะถูกลบทิ้งทั้งหมด คุณแน่ใจหรือไม่?', () => {
                 transactions = []; contracts = []; customCategories = []; saveToStorage();
                 if (googleSheetUrl) {
-                    const opts = (body) => ({ method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
-                    fetch(googleSheetUrl, opts({ entity: 'transaction', action: 'syncAll', transactions: [] })).catch(() => {});
-                    fetch(googleSheetUrl, opts({ entity: 'contract', action: 'syncAll', contracts: [] })).catch(() => {});
-                    fetch(googleSheetUrl, opts({ entity: 'category', action: 'syncAll', categories: [] })).catch(() => {});
+                    const postJson = (body) => fetch(googleSheetUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+                    postJson({ entity: 'transaction', action: 'syncAll', transactions: [] })
+                        .then(() => postJson({ entity: 'contract', action: 'syncAll', contracts: [] }))
+                        .then(() => postJson({ entity: 'category', action: 'syncAll', categories: [] }))
+                        .catch(() => {});
                 }
                 renderAll(); showToast('ล้างข้อมูลทั้งหมดเรียบร้อยแล้ว');
             });
