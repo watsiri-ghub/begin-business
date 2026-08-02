@@ -643,84 +643,186 @@
                             <i data-lucide="copy" class="w-4 h-4"></i> คัดลอกโค้ด
                         </button>
                     </div>
-                    <pre class="text-slate-300 text-[11px] sm:text-xs font-mono p-4 overflow-x-auto max-h-48 select-all smooth-scroll" id="appScriptCodeText">function doPost(e) {
-  try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    if (!e || !e.postData || !e.postData.contents) return ContentService.createTextOutput(JSON.stringify({result: "error"})).setMimeType(ContentService.MimeType.JSON);
-    var data = JSON.parse(e.postData.contents);
-    
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(["ID", "วันที่", "ประเภท", "หมวดหมู่", "เลขสัญญา", "จำนวนเงิน", "ช่องทาง", "หมายเหตุ"]);
-    }
-    
-    var action = data.action || 'add';
-    
-    // Action: Sync All (Overwrites everything)
-    if (action === 'syncAll' && Array.isArray(data.transactions)) {
-      var lastRow = sheet.getLastRow();
-      if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
-      data.transactions.forEach(function(t) {
-        sheet.appendRow([t.id, t.date, t.type, t.categoryName, t.contractCode || "-", t.amount, t.method, t.note]);
-      });
-      return ContentService.createTextOutput(JSON.stringify({result: "success"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Find matching row for Edit or Delete
-    var rows = sheet.getDataRange().getValues();
-    var rowIndex = -1;
-    for (var i = 1; i < rows.length; i++) {
-      if (String(rows[i][0]) === String(data.id)) {
-        rowIndex = i + 1;
-        break;
-      }
-    }
-    
-    // Action: Delete
-    if (action === 'delete') {
-      if (rowIndex > -1) {
-        sheet.deleteRow(rowIndex);
-        return ContentService.createTextOutput(JSON.stringify({result: "success", action: "deleted"})).setMimeType(ContentService.MimeType.JSON);
-      }
-      return ContentService.createTextOutput(JSON.stringify({result: "success", action: "not_found"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Action: Add or Edit
-    var rowData = [data.id, data.date, data.type, data.categoryName, data.contractCode || "-", data.amount, data.method, data.note];
-    if (rowIndex > -1) {
-      sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]); // Edit existing
-    } else {
-      sheet.appendRow(rowData); // Add new
-    }
-    return ContentService.createTextOutput(JSON.stringify({result: "success"})).setMimeType(ContentService.MimeType.JSON);
-  } catch(err) {
-    return ContentService.createTextOutput(JSON.stringify({result: "error", message: err.toString()})).setMimeType(ContentService.MimeType.JSON);
+                    <pre class="text-slate-300 text-[11px] sm:text-xs font-mono p-4 overflow-x-auto max-h-48 select-all smooth-scroll" id="appScriptCodeText">// ระบบจะสร้างแท็บ Transactions, Contracts, Categories ให้อัตโนมัติในสเปรดชีตนี้
+
+function getOrCreateSheet(name, headers) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+  if (sheet.getLastRow() === 0) sheet.appendRow(headers);
+  return sheet;
+}
+
+function jsonOut(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function findRowById(sheet, id) {
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(id)) return i + 1;
   }
+  return -1;
+}
+
+function formatDateCell(cell) {
+  if (!cell) return '';
+  if (Object.prototype.toString.call(cell) === '[object Date]') {
+    return Utilities.formatDate(cell, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  return String(cell).slice(0, 10);
+}
+
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) return jsonOut({ result: "error", message: "no data" });
+    var data = JSON.parse(e.postData.contents);
+    var entity = data.entity || 'transaction';
+    var action = data.action || 'add';
+
+    if (entity === 'contract') return handleContract(data, action);
+    if (entity === 'category') return handleCategory(data, action);
+    return handleTransaction(data, action);
+  } catch (err) {
+    return jsonOut({ result: "error", message: err.toString() });
+  }
+}
+
+function handleTransaction(data, action) {
+  var sheet = getOrCreateSheet('Transactions', ["ID", "วันที่", "ประเภท", "หมวดหมู่", "เลขสัญญา", "จำนวนเงิน", "ช่องทาง", "หมายเหตุ"]);
+  if (action === 'syncAll' && Array.isArray(data.transactions)) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
+    data.transactions.forEach(function(t) {
+      sheet.appendRow([t.id, t.date, t.type, t.categoryName, t.contractCode || "-", t.amount, t.method, t.note]);
+    });
+    return jsonOut({ result: "success" });
+  }
+  var rowIndex = findRowById(sheet, data.id);
+  if (action === 'delete') {
+    if (rowIndex > -1) sheet.deleteRow(rowIndex);
+    return jsonOut({ result: "success" });
+  }
+  var rowData = [data.id, data.date, data.type, data.categoryName, data.contractCode || "-", data.amount, data.method, data.note];
+  if (rowIndex > -1) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return jsonOut({ result: "success" });
+}
+
+function handleContract(data, action) {
+  var sheet = getOrCreateSheet('Contracts', ["ID", "เลขที่สัญญา", "ชื่อโครงการ", "มูลค่าสัญญา", "สถานะ", "วันลงนาม", "วันเริ่ม", "วันสิ้นสุด", "หมายเหตุ"]);
+  if (action === 'syncAll' && Array.isArray(data.contracts)) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
+    data.contracts.forEach(function(c) {
+      sheet.appendRow([c.id, c.code, c.title, c.amount, c.status, c.signDate, c.startDate, c.endDate, c.note]);
+    });
+    return jsonOut({ result: "success" });
+  }
+  var rowIndex = findRowById(sheet, data.id);
+  if (action === 'delete') {
+    if (rowIndex > -1) sheet.deleteRow(rowIndex);
+    return jsonOut({ result: "success" });
+  }
+  var rowData = [data.id, data.code, data.title, data.amount, data.status, data.signDate, data.startDate, data.endDate, data.note];
+  if (rowIndex > -1) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return jsonOut({ result: "success" });
+}
+
+function handleCategory(data, action) {
+  var sheet = getOrCreateSheet('Categories', ["ID", "ชื่อหมวดหมู่", "ประเภท", "ไอคอน", "สี"]);
+  if (action === 'syncAll' && Array.isArray(data.categories)) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
+    data.categories.forEach(function(c) {
+      sheet.appendRow([c.id, c.name, c.type, c.icon, c.color]);
+    });
+    return jsonOut({ result: "success" });
+  }
+  var rowIndex = findRowById(sheet, data.id);
+  if (action === 'delete') {
+    if (rowIndex > -1) sheet.deleteRow(rowIndex);
+    return jsonOut({ result: "success" });
+  }
+  var rowData = [data.id, data.name, data.type, data.icon, data.color];
+  if (rowIndex > -1) sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  else sheet.appendRow(rowData);
+  return jsonOut({ result: "success" });
 }
 
 function doGet(e) {
   try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    var rows = sheet.getDataRange().getValues();
-    var transactions = [];
-    if (rows.length > 1) {
-      for (var i = 1; i < rows.length; i++) {
-        var r = rows[i];
-        transactions.push({
-          id: String(r[0] || ('tr_' + i)),
-          date: r[1] ? String(r[1]).slice(0,10) : new Date().toISOString().slice(0,10),
-          type: r[2] === 'รายรับ' ? 'income' : 'expense',
-          categoryName: r[3],
-          contractCode: r[4],
-          amount: Number(r[5]) || 0,
-          method: r[6] || 'ไม่ระบุ',
-          note: r[7] || ''
-        });
-      }
-    }
-    return ContentService.createTextOutput(JSON.stringify({status: "success", transactions: transactions})).setMimeType(ContentService.MimeType.JSON);
-  } catch(err) {
-    return ContentService.createTextOutput(JSON.stringify({status: "error"})).setMimeType(ContentService.MimeType.JSON);
+    return jsonOut({
+      status: "success",
+      transactions: readTransactions(),
+      contracts: readContracts(),
+      categories: readCategories()
+    });
+  } catch (err) {
+    return jsonOut({ status: "error", message: err.toString() });
   }
+}
+
+function readTransactions() {
+  var sheet = getOrCreateSheet('Transactions', ["ID", "วันที่", "ประเภท", "หมวดหมู่", "เลขสัญญา", "จำนวนเงิน", "ช่องทาง", "หมายเหตุ"]);
+  var rows = sheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0]) continue;
+    out.push({
+      id: String(r[0]),
+      date: formatDateCell(r[1]) || new Date().toISOString().slice(0, 10),
+      type: r[2] === 'รายรับ' ? 'income' : 'expense',
+      categoryName: r[3],
+      contractCode: r[4],
+      amount: Number(r[5]) || 0,
+      method: r[6] || 'ไม่ระบุ',
+      note: r[7] || ''
+    });
+  }
+  return out;
+}
+
+function readContracts() {
+  var sheet = getOrCreateSheet('Contracts', ["ID", "เลขที่สัญญา", "ชื่อโครงการ", "มูลค่าสัญญา", "สถานะ", "วันลงนาม", "วันเริ่ม", "วันสิ้นสุด", "หมายเหตุ"]);
+  var rows = sheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0]) continue;
+    out.push({
+      id: String(r[0]),
+      code: r[1] || '',
+      title: r[2] || '',
+      amount: Number(r[3]) || 0,
+      status: r[4] || 'active',
+      signDate: formatDateCell(r[5]),
+      startDate: formatDateCell(r[6]),
+      endDate: formatDateCell(r[7]),
+      note: r[8] || ''
+    });
+  }
+  return out;
+}
+
+function readCategories() {
+  var sheet = getOrCreateSheet('Categories', ["ID", "ชื่อหมวดหมู่", "ประเภท", "ไอคอน", "สี"]);
+  var rows = sheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0]) continue;
+    out.push({
+      id: String(r[0]),
+      name: r[1] || '',
+      type: r[2] === 'income' ? 'income' : 'expense',
+      icon: r[3] || 'tag',
+      color: r[4] || '#64748b'
+    });
+  }
+  return out;
 }</pre>
                 </div>
 
@@ -933,14 +1035,18 @@ function doGet(e) {
             const color = document.getElementById('catColorInput').value;
 
             if (!name) return;
+            let savedCat;
             if (editId) {
                 const idx = customCategories.findIndex(c => c.id === editId);
-                if (idx !== -1) customCategories[idx] = { id: editId, name, type, icon, color };
+                if (idx !== -1) { customCategories[idx] = { id: editId, name, type, icon, color }; savedCat = customCategories[idx]; }
             } else {
-                customCategories.push({ id: 'cat_custom_' + Date.now(), name, type, icon, color });
+                savedCat = { id: 'cat_custom_' + Date.now(), name, type, icon, color };
+                customCategories.push(savedCat);
             }
 
-            saveToStorage(); window.resetCategoryForm(); renderCategoryOptions(); renderCategoryManagerList(); renderAll();
+            saveToStorage();
+            if (googleSheetUrl && savedCat) sendCategoryToGoogleSheet(savedCat, editId ? 'edit' : 'add');
+            window.resetCategoryForm(); renderCategoryOptions(); renderCategoryManagerList(); renderAll();
             showToast(editId ? 'แก้ไขหมวดหมู่เรียบร้อย' : 'เพิ่มหมวดหมู่ใหม่เรียบร้อย');
         };
 
@@ -967,8 +1073,11 @@ function doGet(e) {
 
         window.deleteCategory = function(id) {
             window.openConfirmModal('ยืนยันการลบหมวดหมู่', 'คุณแน่ใจหรือไม่ว่าต้องการลบหมวดหมู่นี้?', () => {
+                const target = customCategories.find(c => c.id === id);
                 customCategories = customCategories.filter(c => c.id !== id);
-                saveToStorage(); renderCategoryOptions(); renderCategoryManagerList(); renderAll(); showToast('ลบหมวดหมู่เรียบร้อยแล้ว');
+                saveToStorage();
+                if (googleSheetUrl && target) sendCategoryToGoogleSheet(target, 'delete');
+                renderCategoryOptions(); renderCategoryManagerList(); renderAll(); showToast('ลบหมวดหมู่เรียบร้อยแล้ว');
             });
         };
 
@@ -1140,14 +1249,19 @@ function doGet(e) {
                 const idx = contracts.findIndex(c => c.id === editId);
                 if (idx !== -1) contracts[idx] = newCnt;
             } else { contracts.unshift(newCnt); }
-            saveToStorage(); window.closeModal('contractForm'); window.renderContractsListModal(); renderAll();
+            saveToStorage();
+            if (googleSheetUrl) sendContractToGoogleSheet(newCnt, editId ? 'edit' : 'add');
+            window.closeModal('contractForm'); window.renderContractsListModal(); renderAll();
             showToast(editId ? 'แก้ไขสัญญาเรียบร้อย' : 'ลงทะเบียนสัญญาใหม่เรียบร้อย');
         };
 
         window.deleteContract = function(id) {
             window.openConfirmModal('ยืนยันการลบสัญญา', 'คุณแน่ใจหรือไม่ว่าต้องการลบสัญญานี้?', () => {
+                const target = contracts.find(c => c.id === id);
                 contracts = contracts.filter(c => c.id !== id);
-                saveToStorage(); window.renderContractsListModal(); renderAll(); showToast('ลบสัญญาเรียบร้อยแล้ว');
+                saveToStorage();
+                if (googleSheetUrl && target) sendContractToGoogleSheet(target, 'delete');
+                window.renderContractsListModal(); renderAll(); showToast('ลบสัญญาเรียบร้อยแล้ว');
             });
         };
 
@@ -1252,7 +1366,9 @@ function doGet(e) {
             if (searchVal) {
                 items = items.filter(t => {
                     const cat = getCategoryObj(t.category), cnt = contracts.find(c => c.id === t.contractId);
-                    return (t.note || '').toLowerCase().includes(searchVal) || (cat && cat.name.toLowerCase().includes(searchVal)) || (cnt && (cnt.code.toLowerCase().includes(searchVal) || cnt.title.toLowerCase().includes(searchVal)));
+                    const codeText = (cnt ? cnt.code : (t.contractCode || '')).toLowerCase();
+                    const titleText = (cnt ? cnt.title : '').toLowerCase();
+                    return (t.note || '').toLowerCase().includes(searchVal) || (cat && cat.name.toLowerCase().includes(searchVal)) || codeText.includes(searchVal) || titleText.includes(searchVal);
                 });
             }
 
@@ -1263,6 +1379,7 @@ function doGet(e) {
 
             listEl.innerHTML = items.map(t => {
                 const cat = getCategoryObj(t.category), cnt = contracts.find(c => c.id === t.contractId), isIncome = t.type === 'income';
+                const contractLabel = cnt ? cnt.code : (t.contractCode || '');
                 return `
                     <div class="bg-white p-3.5 sm:p-4 rounded-[1rem] border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-blue-300 hover:shadow-md transition-all group">
                         <div class="flex items-start gap-3.5 w-full sm:w-auto">
@@ -1271,7 +1388,7 @@ function doGet(e) {
                                 <div class="font-bold text-[15px] sm:text-base text-slate-800 truncate leading-tight">${t.note || cat.name}</div>
                                 <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] sm:text-xs font-semibold text-slate-500">
                                     <span class="flex items-center gap-1"><i data-lucide="calendar" class="w-3.5 h-3.5"></i> ${t.date}</span><span class="w-1 h-1 rounded-full bg-slate-300"></span><span class="flex items-center gap-1"><i data-lucide="credit-card" class="w-3.5 h-3.5"></i> ${t.method || 'โอนเงิน'}</span>
-                                    ${cnt ? `<span class="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-md border border-blue-200 truncate max-w-[120px] sm:max-w-none ml-1"><i data-lucide="hash" class="w-3 h-3 inline"></i> ${cnt.code}</span>` : ''}
+                                    ${contractLabel ? `<span class="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-md border border-blue-200 truncate max-w-[120px] sm:max-w-none ml-1"><i data-lucide="hash" class="w-3 h-3 inline"></i> ${contractLabel}</span>` : ''}
                                 </div>
                             </div>
                         </div>
@@ -1346,29 +1463,76 @@ function doGet(e) {
             fetch(googleSheetUrl, {
                 method: 'POST', 
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: action, id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: catObj ? catObj.name : '', contractCode: cnt ? cnt.code : '-', amount: t.amount, method: t.method, note: t.note || '' })
+                body: JSON.stringify({ entity: 'transaction', action: action, id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: catObj ? catObj.name : '', contractCode: cnt ? cnt.code : (t.contractCode || '-'), amount: t.amount, method: t.method, note: t.note || '' })
             }).catch(e => console.warn('Google Sheet send error:', e));
+        }
+
+        function sendContractToGoogleSheet(c, action = 'add') {
+            if (!googleSheetUrl) return;
+            fetch(googleSheetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ entity: 'contract', action: action, id: c.id, code: c.code, title: c.title, amount: c.amount, status: c.status, signDate: c.signDate, startDate: c.startDate, endDate: c.endDate, note: c.note || '' })
+            }).catch(e => console.warn('Google Sheet contract send error:', e));
+        }
+
+        function sendCategoryToGoogleSheet(c, action = 'add') {
+            if (!googleSheetUrl) return;
+            fetch(googleSheetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ entity: 'category', action: action, id: c.id, name: c.name, type: c.type, icon: c.icon, color: c.color })
+            }).catch(e => console.warn('Google Sheet category send error:', e));
         }
 
         window.syncAllToGoogleSheets = function() {
             if (!googleSheetUrl) return showToast('กรุณาระบุ Web App URL ก่อน');
             showToast('กำลังบังคับอัปโหลดข้อมูลทั้งหมดไป Cloud...');
-            fetch(googleSheetUrl, {
+            const sendTransactions = fetch(googleSheetUrl, {
                 method: 'POST', 
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
-                    action: 'syncAll',
-                    transactions: transactions.map(t => ({ id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: getCategoryObj(t.category).name, contractCode: (contracts.find(c => c.id === t.contractId) || {}).code || '-', amount: t.amount, method: t.method, note: t.note || '' }))
+                    entity: 'transaction', action: 'syncAll',
+                    transactions: transactions.map(t => ({ id: t.id, date: t.date, type: t.type === 'income' ? 'รายรับ' : 'รายจ่าย', categoryName: getCategoryObj(t.category).name, contractCode: (contracts.find(c => c.id === t.contractId) || {}).code || t.contractCode || '-', amount: t.amount, method: t.method, note: t.note || '' }))
                 })
-            }).then(() => showToast(`ส่งข้อมูลทั้งหมด ${transactions.length} รายการเรียบร้อยแล้ว`)).catch(e => showToast('เกิดข้อผิดพลาดในการส่งข้อมูล'));
+            });
+            const sendContracts = fetch(googleSheetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ entity: 'contract', action: 'syncAll', contracts: contracts })
+            });
+            const sendCategories = fetch(googleSheetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ entity: 'category', action: 'syncAll', categories: customCategories })
+            });
+            Promise.all([sendTransactions, sendContracts, sendCategories])
+                .then(() => showToast(`ส่งข้อมูลทั้งหมดไป Cloud เรียบร้อยแล้ว (${transactions.length} รายการ, ${contracts.length} สัญญา, ${customCategories.length} หมวดหมู่)`))
+                .catch(e => showToast('เกิดข้อผิดพลาดในการส่งข้อมูล'));
         };
 
         window.fetchFromGoogleSheet = function() {
             if (!googleSheetUrl) return showToast('กรุณาระบุ Web App URL ก่อน');
             showToast('กำลังดึงข้อมูลล่าสุดจาก Cloud...');
             fetch(googleSheetUrl).then(res => res.json()).then(data => {
-                if (data && data.status === 'success' && Array.isArray(data.transactions)) {
-                    transactions = data.transactions; saveToStorage(); renderAll(); showToast(`ดึงข้อมูลสมบูรณ์ (${transactions.length} รายการ)`);
+                if (data && data.status === 'success') {
+                    if (Array.isArray(data.contracts)) contracts = data.contracts;
+                    if (Array.isArray(data.categories)) customCategories = data.categories;
+                    if (Array.isArray(data.transactions)) {
+                        transactions = data.transactions.map(t => {
+                            const rawCode = (t.contractCode && t.contractCode !== '-') ? String(t.contractCode).trim() : '';
+                            const matchedContract = rawCode ? contracts.find(c => c.code === rawCode) : null;
+                            return {
+                                id: t.id, date: t.date, type: t.type,
+                                category: t.categoryName || '',
+                                contractId: matchedContract ? matchedContract.id : '',
+                                contractCode: rawCode,
+                                amount: t.amount, method: t.method, note: t.note || '', image: t.image || ''
+                            };
+                        });
+                    }
+                    saveToStorage(); renderCategoryOptions(); renderAll();
+                    showToast(`ดึงข้อมูลสมบูรณ์ (${transactions.length} รายการ, ${contracts.length} สัญญา, ${customCategories.length} หมวดหมู่)`);
                 } else showToast('ไม่พบข้อมูล หรือรูปแบบ URL ไม่ถูกต้อง');
             }).catch(err => showToast('เกิดข้อผิดพลาดในการดึงข้อมูล'));
         };
@@ -1399,7 +1563,12 @@ function doGet(e) {
         window.clearAllDataModal = function() {
             window.openConfirmModal('ยืนยันล้างข้อมูลทั้งหมด', 'ข้อมูลรายการและสัญญาในเครื่องจะถูกลบทิ้งทั้งหมด คุณแน่ใจหรือไม่?', () => {
                 transactions = []; contracts = []; customCategories = []; saveToStorage();
-                if (googleSheetUrl) sendToGoogleSheet({ id: '' }, 'syncAll');
+                if (googleSheetUrl) {
+                    const opts = (body) => ({ method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+                    fetch(googleSheetUrl, opts({ entity: 'transaction', action: 'syncAll', transactions: [] })).catch(() => {});
+                    fetch(googleSheetUrl, opts({ entity: 'contract', action: 'syncAll', contracts: [] })).catch(() => {});
+                    fetch(googleSheetUrl, opts({ entity: 'category', action: 'syncAll', categories: [] })).catch(() => {});
+                }
                 renderAll(); showToast('ล้างข้อมูลทั้งหมดเรียบร้อยแล้ว');
             });
         };
